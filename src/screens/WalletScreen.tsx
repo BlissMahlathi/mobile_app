@@ -8,8 +8,7 @@ import {
   Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import walletService from '../services/walletService';
-import authService from '../services/authService';
+import walletService, { WalletCard } from '../services/walletService';
 
 interface Card {
   id: string;
@@ -26,25 +25,33 @@ export default function WalletScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const user = authService.getCurrentUser();
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'cards'),
-      where('userId', '==', user.uid)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const cardsData: Card[] = [];
-      snapshot.forEach((doc) => {
-        cardsData.push({ id: doc.id, ...doc.data() } as Card);
-      });
-      setCards(cardsData);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
+    loadCards();
   }, []);
+
+  const loadCards = async () => {
+    try {
+      setLoading(true);
+      const walletCards = await walletService.getCards();
+      
+      // Convert WalletCard to Card format
+      const formattedCards: Card[] = walletCards.map((wc: WalletCard) => ({
+        id: wc.id,
+        name: wc.card_name,
+        type: wc.card_type === 'student_id' ? 'student-id' : wc.card_type,
+        cardNumber: wc.card_number,
+        barcodeData: wc.barcode_data,
+        barcodeType: wc.barcode_format,
+        createdAt: new Date(wc.created_at)
+      }));
+      
+      setCards(formattedCards);
+    } catch (error) {
+      console.error('Error loading cards:', error);
+      Alert.alert('Error', 'Failed to load cards');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleDeleteCard = async (cardId: string) => {
     Alert.alert(
@@ -57,7 +64,8 @@ export default function WalletScreen({ navigation }: any) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteDoc(doc(db, 'cards', cardId));
+              await walletService.deleteCard(cardId);
+              await loadCards(); // Reload cards after deletion
             } catch (error) {
               Alert.alert('Error', 'Failed to delete card');
             }
