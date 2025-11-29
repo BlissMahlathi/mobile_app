@@ -23,19 +23,13 @@ export default function AddCardScreen({ navigation }: any) {
       return;
     }
 
-    const user = authService.getCurrentUser();
-    if (!user) {
-      Alert.alert('Error', 'You must be logged in');
-      return;
-    }
-
     try {
-      await addDoc(collection(db, 'cards'), {
-        userId: user.uid,
-        name: cardName,
-        cardNumber: cardNumber || null,
-        type: cardType,
-        createdAt: new Date(),
+      await walletService.addCard({
+        card_name: cardName,
+        card_number: cardNumber || null,
+        card_type: cardType,
+        barcode_data: null,
+        barcode_format: null,
       });
 
       Alert.alert('Success', 'Card added successfully');

@@ -5,32 +5,31 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Alert
+  Alert,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import walletService, { WalletCard } from '../services/walletService';
 
-interface Card {
-  id: string;
-  name: string;
-  type: 'student-id' | 'loyalty' | 'discount';
-  cardNumber?: string;
-  barcodeData?: string;
-  barcodeType?: string;
-  createdAt: Date;
-}
-
 export default function WalletScreen({ navigation }: any) {
-  const [cards, setCards] = useState<Card[]>([]);
+  const [cards, setCards] = useState<WalletCard[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     loadCards();
   }, []);
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadCards();
+    setRefreshing(false);
+  };
+
   const loadCards = async () => {
     try {
-      setLoading(true);
+      if (!refreshing) setLoading(true);
       const walletCards = await walletService.getCards();
       
       // Convert WalletCard to Card format
@@ -88,24 +87,37 @@ export default function WalletScreen({ navigation }: any) {
     }
   };
 
-  const renderCard = ({ item }: { item: Card }) => (
+  const renderCard = ({ item }: { item: WalletCard }) => (
     <TouchableOpacity
       style={styles.card}
       onPress={() => navigation.navigate('CardDetail', { card: item })}
     >
       <View style={styles.cardContent}>
-        <Ionicons 
-          name={getCardIcon(item.type) as any} 
-          size={40} 
-          color="#4CAF50" 
-        />
+        <View style={styles.iconContainer}>
+          <Ionicons 
+            name={getCardIcon(item.card_type) as any} 
+            size={40} 
+            color="#4CAF50" 
+          />
+          {item.barcode_data && (
+            <View style={styles.barcodeBadge}>
+              <Ionicons name="barcode-outline" size={12} color="#4CAF50" />
+            </View>
+          )}
+        </View>
         <View style={styles.cardInfo}>
-          <Text style={styles.cardName}>{item.name}</Text>
+          <Text style={styles.cardName}>{item.card_name}</Text>
           <Text style={styles.cardType}>
-            {item.type.replace('-', ' ').toUpperCase()}
+            {item.card_type?.replace('-', ' ').toUpperCase()}
           </Text>
-          {item.cardNumber && (
-            <Text style={styles.cardNumber}>****{item.cardNumber.slice(-4)}</Text>
+          {item.card_number && (
+            <Text style={styles.cardNumber}>****{item.card_number.slice(-4)}</Text>
+          )}
+          {item.barcode_data && (
+            <View style={styles.scannable}>
+              <Ionicons name="scan" size={14} color="#4CAF50" />
+              <Text style={styles.scannableText}>Scannable</Text>
+            </View>
           )}
         </View>
         <TouchableOpacity
@@ -116,7 +128,16 @@ export default function WalletScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
-  );
+  )
+
+  if (loading && !refreshing) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#4CAF50" />
+        <Text style={{ marginTop: 12, fontSize: 16, color: '#666' }}>Loading cards...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -125,7 +146,7 @@ export default function WalletScreen({ navigation }: any) {
         <Text style={styles.subtitle}>{cards.length} cards</Text>
       </View>
 
-      {cards.length === 0 && !loading ? (
+      {cards.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="wallet-outline" size={80} color="#ccc" />
           <Text style={styles.emptyText}>No cards yet</Text>
@@ -139,6 +160,15 @@ export default function WalletScreen({ navigation }: any) {
           renderItem={renderCard}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#4CAF50']}
+              tintColor="#4CAF50"
+            />
+          }
+          showsVerticalScrollIndicator={false}
         />
       )}
 
@@ -193,14 +223,22 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.1)',
   },
   cardContent: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  iconContainer: {
+    position: 'relative',
+  },
+  barcodeBadge: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    backgroundColor: '#E8F5E9',
+    borderRadius: 10,
+    padding: 2,
   },
   cardInfo: {
     flex: 1,
@@ -220,6 +258,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 4,
+  },
+  scannable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  scannableText: {
+    fontSize: 12,
+    color: '#4CAF50',
+    marginLeft: 4,
+    fontWeight: '600',
   },
   deleteButton: {
     padding: 8,

@@ -8,10 +8,12 @@ import {
   TextInput,
   Alert,
   Modal,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import groceryService from '../services/groceryService';
-import authService from '../services/authService';
+import groceryService, { GroceryItem as ServiceGroceryItem, GroceryListWithItems } from '../services/groceryService';
+import budgetService from '../services/budgetService';
 
 interface GroceryItem {
   id: string;
@@ -39,31 +41,60 @@ export default function GroceryListScreen() {
   const [newItemName, setNewItemName] = useState('');
   const [newItemPrice, setNewItemPrice] = useState('');
   const [checkoutAmount, setCheckoutAmount] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    const user = authService.getCurrentUser();
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'groceryLists'),
-      where('userId', '==', user.uid)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const listsData: GroceryList[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        listsData.push({
-          id: doc.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-        } as GroceryList);
-      });
-      setLists(listsData);
-    });
-
-    return () => unsubscribe();
+    loadLists();
   }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadLists();
+    setRefreshing(false);
+  };
+
+  const loadLists = async () => {
+    try {
+      if (!refreshing) setLoading(true);
+      const serviceLists = await groceryService.getLists();
+      
+      // Load items for each list and convert to component format
+      const listsWithItems = await Promise.all(
+        serviceLists.map(async (list) => {
+          const listWithItems = await groceryService.getList(list.id);
+          if (!listWithItems) return null;
+          
+          const items: GroceryItem[] = listWithItems.items.map((item: ServiceGroceryItem) => ({
+            id: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            estimatedPrice: item.estimated_price || 0,
+            purchased: item.is_purchased
+          }));
+          
+          const totalEstimated = items.reduce((sum, item) => sum + item.estimatedPrice, 0);
+          
+          return {
+            id: list.id,
+            name: list.name,
+            items,
+            totalEstimated,
+            actualTotal: list.total_amount,
+            completed: !!list.completed_at,
+            createdAt: new Date(list.created_at)
+          };
+        })
+      );
+      
+      setLists(listsWithItems.filter((list): list is GroceryList => list !== null));
+    } catch (error) {
+      console.error('Error loading grocery lists:', error);
+      Alert.alert('Error', 'Failed to load grocery lists');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const createNewList = async () => {
     if (!newListName.trim()) {
@@ -71,21 +102,11 @@ export default function GroceryListScreen() {
       return;
     }
 
-    const user = authService.getCurrentUser();
-    if (!user) return;
-
     try {
-      await addDoc(collection(db, 'groceryLists'), {
-        userId: user.uid,
-        name: newListName,
-        items: [],
-        totalEstimated: 0,
-        completed: false,
-        createdAt: new Date(),
-      });
-
+      await groceryService.createList(newListName);
       setNewListName('');
       setShowNewListModal(false);
+      await loadLists();
     } catch (error) {
       Alert.alert('Error', 'Failed to create list');
     }
@@ -98,28 +119,40 @@ export default function GroceryListScreen() {
     }
 
     const price = parseFloat(newItemPrice) || 0;
-    const list = lists.find((l) => l.id === listId);
-    if (!list) return;
-
-    const newItem: GroceryItem = {
-      id: Date.now().toString(),
-      name: newItemName,
-      quantity: 1,
-      estimatedPrice: price,
-      purchased: false,
-    };
-
-    const updatedItems = [...list.items, newItem];
-    const totalEstimated = updatedItems.reduce((sum, item) => sum + item.estimatedPrice, 0);
 
     try {
-      await updateDoc(doc(db, 'groceryLists', listId), {
-        items: updatedItems,
-        totalEstimated,
+      await groceryService.addItem(listId, {
+        name: newItemName,
+        quantity: 1,
+        estimated_price: price,
+        is_purchased: false,
       });
 
       setNewItemName('');
       setNewItemPrice('');
+      await loadLists();
+      
+      // Update selected list
+      const updatedList = await groceryService.getList(listId);
+      if (updatedList) {
+        const items: GroceryItem[] = updatedList.items.map((item: ServiceGroceryItem) => ({
+          id: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          estimatedPrice: item.estimated_price || 0,
+          purchased: item.is_purchased
+        }));
+        
+        setSelectedList({
+          id: updatedList.id,
+          name: updatedList.name,
+          items,
+          totalEstimated: items.reduce((sum, item) => sum + item.estimatedPrice, 0),
+          actualTotal: updatedList.total_amount,
+          completed: !!updatedList.completed_at,
+          createdAt: new Date(updatedList.created_at)
+        });
+      }
     } catch (error) {
       Alert.alert('Error', 'Failed to add item');
     }
@@ -129,14 +162,37 @@ export default function GroceryListScreen() {
     const list = lists.find((l) => l.id === listId);
     if (!list) return;
 
-    const updatedItems = list.items.map((item) =>
-      item.id === itemId ? { ...item, purchased: !item.purchased } : item
-    );
+    const item = list.items.find((i) => i.id === itemId);
+    if (!item) return;
 
     try {
-      await updateDoc(doc(db, 'groceryLists', listId), {
-        items: updatedItems,
+      await groceryService.updateItem(itemId, {
+        is_purchased: !item.purchased,
       });
+
+      await loadLists();
+      
+      // Update selected list
+      const updatedList = await groceryService.getList(listId);
+      if (updatedList) {
+        const items: GroceryItem[] = updatedList.items.map((item: ServiceGroceryItem) => ({
+          id: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          estimatedPrice: item.estimated_price || 0,
+          purchased: item.is_purchased
+        }));
+        
+        setSelectedList({
+          id: updatedList.id,
+          name: updatedList.name,
+          items,
+          totalEstimated: items.reduce((sum, item) => sum + item.estimatedPrice, 0),
+          actualTotal: updatedList.total_amount,
+          completed: !!updatedList.completed_at,
+          createdAt: new Date(updatedList.created_at)
+        });
+      }
     } catch (error) {
       Alert.alert('Error', 'Failed to update item');
     }
@@ -149,54 +205,75 @@ export default function GroceryListScreen() {
       return;
     }
 
-    const user = authService.getCurrentUser();
-    if (!user) return;
-
     try {
       // Update grocery list
-      await updateDoc(doc(db, 'groceryLists', listId), {
-        completed: true,
-        actualTotal: amount,
+      await groceryService.updateList(listId, {
+        completed_at: new Date().toISOString(),
+        total_amount: amount,
       });
 
       // Add as expense transaction
-      await addDoc(collection(db, 'transactions'), {
-        userId: user.uid,
+      await budgetService.addTransaction({
         type: 'expense',
         amount,
-        category: 'Food',
         description: `Grocery shopping - ${selectedList?.name}`,
-        date: new Date(),
-        createdAt: new Date(),
+        date: new Date().toISOString(),
       });
 
       Alert.alert('Success', 'Checkout completed and budget updated!');
       setCheckoutAmount('');
       setSelectedList(null);
+      await loadLists();
     } catch (error) {
       Alert.alert('Error', 'Failed to complete checkout');
     }
   };
 
-  const renderListItem = ({ item }: { item: GroceryList }) => (
-    <TouchableOpacity
-      style={styles.listCard}
-      onPress={() => setSelectedList(item)}
-    >
-      <View style={styles.listHeader}>
-        <Ionicons name="cart" size={32} color="#4CAF50" />
-        <View style={styles.listInfo}>
-          <Text style={styles.listName}>{item.name}</Text>
-          <Text style={styles.listMeta}>
-            {item.items.length} items • ${item.totalEstimated.toFixed(2)} estimated
-          </Text>
+  const renderListItem = ({ item }: { item: GroceryList }) => {
+    const purchasedCount = item.items.filter(i => i.purchased).length;
+    const totalItems = item.items.length;
+    const progress = totalItems > 0 ? (purchasedCount / totalItems) * 100 : 0;
+
+    return (
+      <TouchableOpacity
+        style={styles.listCard}
+        onPress={() => setSelectedList(item)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.listHeader}>
+          <View style={[styles.iconContainer, item.completed && styles.iconContainerCompleted]}>
+            <Ionicons 
+              name={item.completed ? "checkmark-circle" : "cart"} 
+              size={28} 
+              color={item.completed ? "#fff" : "#4CAF50"} 
+            />
+          </View>
+          <View style={styles.listInfo}>
+            <View style={styles.listTitleRow}>
+              <Text style={styles.listName}>{item.name}</Text>
+              {!item.completed && totalItems > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{purchasedCount}/{totalItems}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.listMeta}>
+              {totalItems} {totalItems === 1 ? 'item' : 'items'} • ${item.totalEstimated.toFixed(2)} estimated
+            </Text>
+            {!item.completed && progress > 0 && (
+              <View style={styles.progressBarContainer}>
+                <View style={[styles.progressBar, { width: `${progress}%` }]} />
+              </View>
+            )}
+            {item.completed && item.actualTotal && (
+              <Text style={styles.completedText}>Completed • ${item.actualTotal.toFixed(2)}</Text>
+            )}
+          </View>
+          <Ionicons name="chevron-forward" size={24} color="#ccc" />
         </View>
-        {item.completed && (
-          <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
-        )}
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   const renderGroceryItem = ({ item }: { item: GroceryItem }) => (
     <TouchableOpacity
@@ -220,11 +297,23 @@ export default function GroceryListScreen() {
     </TouchableOpacity>
   );
 
+  if (loading && !refreshing) {
+    return (
+      <View style={[styles.container, styles.centerContent]}>
+        <ActivityIndicator size="large" color="#4CAF50" />
+        <Text style={styles.loadingText}>Loading grocery lists...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Grocery Lists</Text>
-        <TouchableOpacity onPress={() => setShowNewListModal(true)}>
+        <View>
+          <Text style={styles.title}>Grocery Lists</Text>
+          <Text style={styles.subtitle}>{lists.length} active lists</Text>
+        </View>
+        <TouchableOpacity onPress={() => setShowNewListModal(true)} style={styles.addButton}>
           <Ionicons name="add-circle" size={32} color="#4CAF50" />
         </TouchableOpacity>
       </View>
@@ -246,6 +335,15 @@ export default function GroceryListScreen() {
           renderItem={renderListItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#4CAF50']}
+              tintColor="#4CAF50"
+            />
+          }
+          showsVerticalScrollIndicator={false}
         />
       )}
 
@@ -355,6 +453,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
+  centerContent: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#666',
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -369,36 +476,90 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
   },
+  subtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+  },
+  addButton: {
+    padding: 4,
+  },
   list: {
     padding: 16,
   },
   listCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 16,
     marginBottom: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    elevation: 3,
+    boxShadow: '0px 2px 8px rgba(0, 0, 0, 0.08)',
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
   },
   listHeader: {
     flexDirection: 'row',
     alignItems: 'center',
   },
+  iconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F0F9F4',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  iconContainerCompleted: {
+    backgroundColor: '#4CAF50',
+  },
   listInfo: {
     flex: 1,
-    marginLeft: 16,
+    marginLeft: 12,
+  },
+  listTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   listName: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
+    flex: 1,
+  },
+  badge: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 8,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   listMeta: {
     fontSize: 14,
     color: '#666',
+    marginTop: 4,
+  },
+  progressBarContainer: {
+    height: 6,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 3,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#4CAF50',
+    borderRadius: 3,
+  },
+  completedText: {
+    fontSize: 14,
+    color: '#4CAF50',
+    fontWeight: '600',
     marginTop: 4,
   },
   emptyState: {
@@ -406,12 +567,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 40,
+    backgroundColor: '#fff',
+    margin: 16,
+    borderRadius: 16,
   },
   emptyText: {
-    fontSize: 18,
-    color: '#999',
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#333',
     marginTop: 16,
-    marginBottom: 24,
+    marginBottom: 8,
   },
   modalContainer: {
     flex: 1,

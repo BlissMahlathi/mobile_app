@@ -6,6 +6,8 @@ import {
   ScrollView,
   Dimensions,
   TouchableOpacity,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LineChart, PieChart, BarChart } from 'react-native-chart-kit';
@@ -26,14 +28,21 @@ export default function DashboardScreen() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [timeRange, setTimeRange] = useState<'week' | 'month' | 'year'>('month');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     loadTransactions();
   }, [timeRange]);
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadTransactions();
+    setRefreshing(false);
+  };
+
   const loadTransactions = async () => {
     try {
-      setLoading(true);
+      if (!refreshing) setLoading(true);
       const now = new Date();
       let startDate: Date;
 
@@ -138,8 +147,28 @@ export default function DashboardScreen() {
     },
   };
 
+  if (loading && !refreshing) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#4CAF50" />
+        <Text style={{ marginTop: 12, fontSize: 16, color: '#666' }}>Loading dashboard...</Text>
+      </View>
+    );
+  }
+
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView 
+      style={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={['#4CAF50']}
+          tintColor="#4CAF50"
+        />
+      }
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.header}>
         <Text style={styles.title}>Dashboard</Text>
         <Text style={styles.subtitle}>Your financial overview</Text>
@@ -294,10 +323,7 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.1)',
   },
   summaryLabel: {
     fontSize: 12,

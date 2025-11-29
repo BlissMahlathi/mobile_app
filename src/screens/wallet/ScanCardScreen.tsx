@@ -46,20 +46,13 @@ export default function ScanCardScreen({ navigation }: any) {
   };
 
   const saveScannedCard = async (type: string, data: string) => {
-    const user = authService.getCurrentUser();
-    if (!user) {
-      Alert.alert('Error', 'You must be logged in');
-      return;
-    }
-
     try {
-      await addDoc(collection(db, 'cards'), {
-        userId: user.uid,
-        name: `Scanned Card - ${new Date().toLocaleDateString()}`,
-        barcodeData: data,
-        barcodeType: type,
-        type: 'loyalty',
-        createdAt: new Date(),
+      await walletService.addCard({
+        card_name: `Scanned Card - ${new Date().toLocaleDateString()}`,
+        card_number: null,
+        card_type: 'loyalty',
+        barcode_data: data,
+        barcode_format: type,
       });
 
       Alert.alert('Success', 'Card saved successfully', [

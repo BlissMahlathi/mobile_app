@@ -25,30 +25,24 @@ export default function TransactionHistoryScreen() {
   const [filter, setFilter] = useState<'all' | 'income' | 'expense'>('all');
 
   useEffect(() => {
-    const user = authService.getCurrentUser();
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'transactions'),
-      where('userId', '==', user.uid),
-      orderBy('date', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const txData: Transaction[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        txData.push({
-          id: doc.id,
-          ...data,
-          date: data.date?.toDate() || new Date(),
-        } as Transaction);
-      });
-      setTransactions(txData);
-    });
-
-    return () => unsubscribe();
+    loadTransactions();
   }, []);
+
+  const loadTransactions = async () => {
+    try {
+      const txData = await budgetService.getTransactions();
+      setTransactions(txData.map(t => ({
+        id: t.id,
+        type: t.type,
+        amount: t.amount,
+        category: t.category_id || 'Other',
+        description: t.description || '',
+        date: new Date(t.date),
+      })));
+    } catch (error) {
+      console.error('Error loading transactions:', error);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     Alert.alert(
@@ -61,7 +55,8 @@ export default function TransactionHistoryScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteDoc(doc(db, 'transactions', id));
+              await budgetService.deleteTransaction(id);
+              await loadTransactions();
             } catch (error) {
               Alert.alert('Error', 'Failed to delete transaction');
             }
@@ -194,10 +189,7 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.1)',
   },
   transactionHeader: {
     flexDirection: 'row',

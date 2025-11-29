@@ -34,21 +34,13 @@ export default function AddTransactionScreen({ navigation }: any) {
       return;
     }
 
-    const user = authService.getCurrentUser();
-    if (!user) {
-      Alert.alert('Error', 'You must be logged in');
-      return;
-    }
-
     try {
-      await addDoc(collection(db, 'transactions'), {
-        userId: user.uid,
+      await budgetService.addTransaction({
         type,
         amount: parseFloat(amount),
-        category,
+        category_id: category,
         description,
-        date: new Date(),
-        createdAt: new Date(),
+        date: new Date().toISOString(),
       });
 
       Alert.alert('Success', 'Transaction added successfully');

@@ -5,10 +5,12 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Alert,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import budgetService from '../services/budgetService';
-import authService from '../services/authService';
+import budgetService, { Transaction as BudgetTransaction } from '../services/budgetService';
 
 interface Transaction {
   id: string;
@@ -22,26 +24,42 @@ interface Transaction {
 export default function BudgetScreen({ navigation }: any) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [monthlyBudget, setMonthlyBudget] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    const user = authService.getCurrentUser();
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'transactions'),
-      where('userId', '==', user.uid)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const txData: Transaction[] = [];
-      snapshot.forEach((doc) => {
-        txData.push({ id: doc.id, ...doc.data() } as Transaction);
-      });
-      setTransactions(txData);
-    });
-
-    return () => unsubscribe();
+    loadTransactions();
   }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadTransactions();
+    setRefreshing(false);
+  };
+
+  const loadTransactions = async () => {
+    try {
+      if (!refreshing) setLoading(true);
+      const budgetTransactions = await budgetService.getTransactions();
+      
+      // Convert BudgetTransaction to Transaction format
+      const formattedTransactions: Transaction[] = budgetTransactions.map((bt: BudgetTransaction) => ({
+        id: bt.id,
+        type: bt.type,
+        amount: bt.amount,
+        category: bt.category_id || 'Uncategorized',
+        description: bt.description || '',
+        date: new Date(bt.date)
+      }));
+      
+      setTransactions(formattedTransactions);
+    } catch (error) {
+      console.error('Error loading transactions:', error);
+      Alert.alert('Error', 'Failed to load transactions');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const totalIncome = transactions
     .filter(t => t.type === 'income')
@@ -60,8 +78,28 @@ export default function BudgetScreen({ navigation }: any) {
       return acc;
     }, {} as Record<string, number>);
 
+  if (loading && !refreshing) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#4CAF50" />
+        <Text style={{ marginTop: 12, fontSize: 16, color: '#666' }}>Loading budget...</Text>
+      </View>
+    );
+  }
+
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView 
+      style={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={['#4CAF50']}
+          tintColor="#4CAF50"
+        />
+      }
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.header}>
         <Text style={styles.title}>Budget Overview</Text>
       </View>
@@ -194,10 +232,7 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.1)',
   },
   summaryLabel: {
     fontSize: 12,
